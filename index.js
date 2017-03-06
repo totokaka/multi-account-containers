@@ -49,12 +49,13 @@ const PREFS = [
 
 const { AddonManager } = require("resource://gre/modules/AddonManager.jsm");
 const { attachTo, detachFrom } = require("sdk/content/mod");
-const { Cu } = require("chrome");
+const { Cc, Ci, Cu } = require("chrome");
 const { ContextualIdentityService } = require("resource://gre/modules/ContextualIdentityService.jsm");
 const { getFavicon } = require("sdk/places/favicon");
 const Metrics = require("./testpilot-metrics");
 const { modelFor } = require("sdk/model/core");
 const prefService = require("sdk/preferences/service");
+const prompts = Cc["@mozilla.org/embedcomp/prompt-service;1"].getService(Ci.nsIPromptService);
 const self = require("sdk/self");
 const ss = require("sdk/simple-storage");
 const { Style } = require("sdk/stylesheet/style");
@@ -108,6 +109,17 @@ const ContextualIdentityProxy = {
   }
 };
 
+
+const UninstallConfirmation = {
+  onUninstalling(addon) {
+    if (addon.id === self.id) {
+      if (!prompts.confirm(null, "Do you want to uninstall Containers experiment", "All container tabs will be closed. Are you sure you want to uninstall Containers.")) {
+        return false;
+      }
+    }
+  }
+};
+
 // ----------------------------------------------------------------------------
 // ContainerService
 
@@ -121,6 +133,9 @@ const ContainerService = {
     // uninstallation. This object contains also a version number, in case we
     // need to implement a migration in the future.
     if (installation) {
+
+      AddonManager.addAddonListener(UninstallConfirmation);
+
       let preInstalledIdentities = []; // eslint-disable-line prefer-const
       ContextualIdentityProxy.getIdentities().forEach(identity => {
         preInstalledIdentities.push(identity.userContextId);
