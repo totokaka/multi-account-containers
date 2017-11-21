@@ -500,6 +500,20 @@ Logic.registerPanel(P_CONTAINERS_LIST, {
       }
     });
 
+    Logic.addEnterHandler(document.querySelector("#unhide-all-containers-link"), async function () {
+      try {
+        await browser.runtime.sendMessage({
+          method: "unhideAllTabs",
+          message: {
+            windowId: browser.windows.WINDOW_ID_CURRENT
+          }
+        });
+        window.close();
+      } catch (e) {
+        window.close();
+      }
+    });
+
     document.addEventListener("keydown", (e) => {
       const selectables = [...document.querySelectorAll("[tabindex='0'], [tabindex='-1']")];
       const element = document.activeElement;
@@ -516,12 +530,48 @@ Logic.registerPanel(P_CONTAINERS_LIST, {
           previousElement.focus();
         }
       }
+      function select(num) {
+        const element = selectables[num];
+        if (element) {
+          element.click();
+        }
+      }
       switch (e.keyCode) {
       case 40:
         next();
         break;
       case 38:
         previous();
+        break;
+      case 49:
+        select(1);
+        break;
+      case 50:
+        select(2);
+        break;
+      case 51:
+        select(3);
+        break;
+      case 52:
+        select(4);
+        break;
+      case 53:
+        select(5);
+        break;
+      case 54:
+        select(6);
+        break;
+      case 55:
+        select(7);
+        break;
+      case 56:
+        select(8);
+        break;
+      case 57:
+        select(9);
+        break;
+      case 48:
+        select(10);
         break;
       }
     });
@@ -559,24 +609,77 @@ Logic.registerPanel(P_CONTAINERS_LIST, {
     assignmentCheckboxElement.disabled = disabled;
   },
 
+  setupReopenSelect(currentTab, currentContainer) {
+    const reopenSelectElement = document.getElementById("container-page-reopen");
+    reopenSelectElement.innerHTML = "";
+
+    const identities = Logic.identities();
+    // We have to push the default container, as it is not really an identity
+    if (currentContainer.color === "default-tab") {
+      identities.push(currentContainer);
+    }
+
+    for (const identity of identities) {
+      const option = document.createElement("option");
+      option.text = identity.name;
+      option.value = identity.cookieStoreId;
+      option.setAttribute("data-identity-icon", identity.icon);
+      option.setAttribute("data-identity-color", identity.color);
+
+      // The current container (might be default) should be the default, but
+      // unselectable, as we can not reopen in the same conainer
+      if (identity.cookieStoreId === currentContainer.cookieStoreId) {
+        option.defaultSelected = true;
+        option.disabled = true;
+        option.hidden = true;
+      }
+
+      reopenSelectElement.add(option);
+    }
+
+    reopenSelectElement.removeEventListener("change", this.reopenListener);
+    this.reopenListener = event => {
+      if (event.target.value === currentContainer.cookieStoreId) {
+        return;
+      }
+      browser.tabs.create({
+        active: true,
+        cookieStoreId: event.target.value,
+        index: currentTab.index + 1,
+        openerTabId: currentTab.id,
+        pinned: currentTab.pinned,
+        url: currentTab.url,
+      }).then(() => {
+        browser.tabs.remove(currentTab.id);
+      }).then(window.close).catch(window.close);
+    };
+    reopenSelectElement.addEventListener("change", this.reopenListener);
+  },
+
   async prepareCurrentTabHeader() {
     const currentTab = await Logic.currentTab();
+    const currentTabUserContextId = Logic.userContextId(currentTab.cookieStoreId);
     const currentTabElement = document.getElementById("current-tab");
     const assignmentCheckboxElement = document.getElementById("container-page-assigned");
-    const currentTabUserContextId = Logic.userContextId(currentTab.cookieStoreId);
+
+    currentTabElement.hidden = !currentTab;
     assignmentCheckboxElement.addEventListener("change", () => {
       Logic.setOrRemoveAssignment(currentTab.id, currentTab.url, currentTabUserContextId, !assignmentCheckboxElement.checked);
     });
-    currentTabElement.hidden = !currentTab;
+
     this.setupAssignmentCheckbox(false, currentTabUserContextId);
+
     if (currentTab) {
       const identity = await Logic.identity(currentTab.cookieStoreId);
       const siteSettings = await Logic.getAssignment(currentTab);
       this.setupAssignmentCheckbox(siteSettings, currentTabUserContextId);
+
       const currentPage = document.getElementById("current-page");
       currentPage.innerHTML = escaped`<span class="page-title truncate-text">${currentTab.title}</span>`;
       const favIconElement = Utils.createFavIconElement(currentTab.favIconUrl || "");
       currentPage.prepend(favIconElement);
+
+      this.setupReopenSelect(currentTab, identity);
 
       const currentContainer = document.getElementById("current-container");
       currentContainer.innerText = identity.name;
@@ -595,6 +698,7 @@ Logic.registerPanel(P_CONTAINERS_LIST, {
       const hasTabs = (identity.hasHiddenTabs || identity.hasOpenTabs);
       const tr = document.createElement("tr");
       const context = document.createElement("td");
+      const hide = document.createElement("td");
       const manage = document.createElement("td");
 
       tr.classList.add("container-panel-row");
@@ -615,11 +719,24 @@ Logic.registerPanel(P_CONTAINERS_LIST, {
       context.querySelector(".container-name").textContent = identity.name;
       manage.innerHTML = "<img src='/img/container-arrow.svg' class='show-tabs pop-button-image-small' />";
 
+      hide.classList.add("hide-or-show-tabs", "pop-button");
+      const img = document.createElement("img");
+      img.classList.add("hide-or-show-tabs", "pop-button-image-small");
+      if (identity.hasHiddenTabs) {
+        hide.title = escaped`Show ${identity.name} container`;
+        img.setAttribute("src", CONTAINER_HIDE_SRC);
+      } else {
+        hide.title = escaped`Hide ${identity.name} container`;
+        img.setAttribute("src", CONTAINER_UNHIDE_SRC);
+      }
+      hide.appendChild(img);
+
       fragment.appendChild(tr);
 
       tr.appendChild(context);
 
       if (hasTabs) {
+        tr.appendChild(hide);
         tr.appendChild(manage);
       }
 
@@ -627,16 +744,19 @@ Logic.registerPanel(P_CONTAINERS_LIST, {
         if (e.target.matches(".open-newtab")
             || e.target.parentNode.matches(".open-newtab")
             || e.type === "keydown") {
-          try {
-            browser.tabs.create({
-              cookieStoreId: identity.cookieStoreId
-            });
-            window.close();
-          } catch (e) {
-            window.close();
-          }
-        } else if (hasTabs) {
+          browser.tabs.create({
+            cookieStoreId: identity.cookieStoreId
+          }).then(window.close).catch(window.close);
+        } else if (e.target.matches(".show-tabs")
+                   || e.target.parentNode.matches(".show-tabs")) {
           Logic.showPanel(P_CONTAINER_INFO, identity);
+        } else if (e.target.matches(".hide-or-show-tabs")
+                   || e.target.parentNode.matches(".hide-or-show-tabs")) {
+          browser.runtime.sendMessage({
+            method: identity.hasHiddenTabs ? "showTabs" : "hideTabs",
+            windowId: browser.windows.WINDOW_ID_CURRENT,
+            cookieStoreId: identity.cookieStoreId
+          }).then(window.close).catch(window.close);
         }
       });
     });
@@ -679,6 +799,19 @@ Logic.registerPanel(P_CONTAINER_INFO, {
       try {
         browser.runtime.sendMessage({
           method: identity.hasHiddenTabs ? "showTabs" : "hideTabs",
+          windowId: browser.windows.WINDOW_ID_CURRENT,
+          cookieStoreId: Logic.currentCookieStoreId()
+        });
+        window.close();
+      } catch (e) {
+        window.close();
+      }
+    });
+
+    Logic.addEnterHandler(document.querySelector("#container-info-hideothers"), async function () {
+      try {
+        browser.runtime.sendMessage({
+          method: "showOnly",
           windowId: browser.windows.WINDOW_ID_CURRENT,
           cookieStoreId: Logic.currentCookieStoreId()
         });
@@ -743,6 +876,9 @@ Logic.registerPanel(P_CONTAINER_INFO, {
 
     const hideShowLabel = document.getElementById("container-info-hideorshow-label");
     hideShowLabel.textContent = identity.hasHiddenTabs ? "Show this container" : "Hide this container";
+
+    const hideOthersLabel = document.getElementById("container-info-hideothers");
+    hideOthersLabel.textContent = identity.hasHiddenTabs ? "Show only this container" : "Hide other containers";
 
     // Let's remove all the previous tabs.
     const table = document.getElementById("container-info-table");
